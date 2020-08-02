@@ -9,10 +9,13 @@ from twisted.python import log
 
 domain = sys.argv[1]
 port = int(sys.argv[2])
-ttl = 120
+ttl = 0 # TODO 120
 timeout = 2
 
 class DynamicResolver(object):
+    def __init__(self):
+        self.zeroconf = Zeroconf(ip_version=4)
+    
     def _dynamicResponseRequired(self, query):
         if str(query.name).endswith(domain):
             return True
@@ -31,40 +34,28 @@ class DynamicResolver(object):
                 if state_change is ServiceStateChange.Added:
                     services.append(name)
             
-            zeroconf = Zeroconf(ip_version=4) # TODO: move out?
-            sb = ServiceBrowser(zeroconf, localname, [handler])
-            print("waiting for", localname) # TODO: remove
+            sb = ServiceBrowser(self.zeroconf, localname, [handler])
             time.sleep(timeout)
             sb.cancel()
-            print("done waiting for", localname) # TODO: remove
             
             answers = []
             for service in services:
                 answers.append(dns.RRHeader(name=query.name.name, ttl=ttl, type=dns.PTR, payload=dns.Record_PTR(
                     name=service[:-6] + domain
                 )))
-            return answers
+            return answers, [], []
         
         def txt(localname):
-            zeroconf = Zeroconf(ip_version=4) # TODO: move out?
-            print("waiting for txt", localname) # TODO: remove
-            info = zeroconf.get_service_info(localname, localname)
-            print("done waiting for txt", localname) # TODO: remove
+            info = self.zeroconf.get_service_info(localname, localname)
             
-            if info.text == b"\0":
-                answers = []
-            else:
-                answers = [dns.RRHeader(name=query.name.name, ttl=ttl, type=dns.TXT, payload=dns.Record_TXT(
-                        info.text # TODO: something wrong here?
-                    ))]
-            print(answers, type(info.text), info.text)
-            return answers
+            data = [b"%s=%s" % (p, info.properties[p]) for p in info.properties]
+            answers = [dns.RRHeader(name=query.name.name, ttl=ttl, type=dns.TXT, payload=dns.Record_TXT(
+                   *data
+                ))]
+            return answers, [], []
         
         def srv(localname):
-            zeroconf = Zeroconf(ip_version=4) # TODO: move out?
-            print("waiting for srv", localname)
-            info = zeroconf.get_service_info(localname, localname)
-            print("done waiting for srv", localname)
+            info = self.zeroconf.get_service_info(localname, localname)
             
             answers = [dns.RRHeader(name=query.name.name, ttl=ttl, type=dns.SRV, payload=dns.Record_SRV(
                     info.priority, info.weight, info.port, info.server[:-6] + domain
@@ -72,7 +63,7 @@ class DynamicResolver(object):
             
             print(answers)
             
-            return answers
+            return answers, [], []
         
         def host(localname):
             answers = [dns.RRHeader(name=query.name.name, ttl=ttl, type=dns.A, payload=dns.Record_A(
@@ -81,32 +72,26 @@ class DynamicResolver(object):
             
             print(answers)
             
-            return answers
+            return answers, [], []
         
         d = defer.Deferred()
         
         if query.type == dns.PTR:
             d = threads.deferToThread(browse, localname)
-            d.addCallback(lambda a: (a, [], []))
             return d
         elif query.type == dns.TXT:
             d = threads.deferToThread(txt, localname)
-            d.addCallback(lambda a: (a, [], []))
             return d
         elif query.type == dns.SRV:
             d = threads.deferToThread(srv, localname)
-            d.addCallback(lambda a: (a, [], []))
             return d
         elif query.type == dns.A:
             d = threads.deferToThread(host, localname)
-            d.addCallback(lambda a: (a, [], []))
             return d
-        else:
-            answers = []
-            d.callback((answers, [], []))
-            if query.type != dns.AAAA:
-                print("Unsupported request", query)
-            return d
+        elif query.type != dns.AAAA:
+            print("Unsupported request", query)
+        d.callback(([], [], []))
+        return d
 
     def query(self, query, timeout=None):
         if self._dynamicResponseRequired(query):
