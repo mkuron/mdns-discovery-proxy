@@ -6,6 +6,7 @@ import time
 from twisted.internet import reactor, defer, threads
 from twisted.names import client, dns, error, server
 from twisted.python import log
+import socket
 
 domain = sys.argv[1]
 port = int(sys.argv[2])
@@ -60,17 +61,17 @@ class DynamicResolver(object):
             answers = [dns.RRHeader(name=query.name.name, ttl=ttl, type=dns.SRV, payload=dns.Record_SRV(
                     info.priority, info.weight, info.port, info.server[:-6] + domain
                 ))]
+            additional = [dns.RRHeader(name=info.server[:-6] + domain, ttl=ttl, type=dns.A, payload=dns.Record_A(
+                    socket.inet_ntop(socket.AF_INET, addr)
+                )) for addr in info.addresses]
             
-            print(answers)
-            
-            return answers, [], []
+            return answers, [], additional
         
         def host(localname):
+            
             answers = [dns.RRHeader(name=query.name.name, ttl=ttl, type=dns.A, payload=dns.Record_A(
                     "192.0.2.1" # TODO
                 ))]
-            
-            print(answers)
             
             return answers, [], []
         
