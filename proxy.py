@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from zeroconf import Zeroconf, ServiceBrowser, ServiceStateChange
+from zeroconf import Zeroconf, ServiceBrowser, ServiceStateChange, DNSQuestion, DNSOutgoing, RecordUpdateListener, _TYPE_A, _CLASS_IN, _FLAGS_QR_QUERY
 import sys
 import time
 from twisted.internet import reactor, defer, threads
@@ -10,7 +10,7 @@ import socket
 
 domain = sys.argv[1]
 port = int(sys.argv[2])
-ttl = 0 # TODO 120
+ttl = 120
 timeout = 2
 
 class DynamicResolver(object):
@@ -68,10 +68,27 @@ class DynamicResolver(object):
             return answers, [], additional
         
         def host(localname):
+            class listener(RecordUpdateListener):
+                def __init__(self):
+                    self.addrs = []
+                    self.time = time.time()
+                def update_record(self, zc, now, record):
+                    if record.type == _TYPE_A and len(record.address) == 4:
+                        self.addrs.append(socket.inet_ntop(socket.AF_INET, record.address))
+            
+            l = listener()
+            q = DNSQuestion(localname, _TYPE_A, _CLASS_IN)
+            self.zeroconf.add_listener(l, q)
+            out = DNSOutgoing(_FLAGS_QR_QUERY)
+            out.add_question(q)
+            self.zeroconf.send(out)
+            while len(l.addrs) == 0 and time.time() - l.time < timeout:
+                time.sleep(0.1)
+            self.zeroconf.remove_listener(l)
             
             answers = [dns.RRHeader(name=query.name.name, ttl=ttl, type=dns.A, payload=dns.Record_A(
-                    "192.0.2.1" # TODO
-                ))]
+                    addr
+                )) for addr in l.addrs]
             
             return answers, [], []
         
