@@ -10,11 +10,18 @@ To use the discovery proxy, run it while specifying a domain to use and a port n
 python3 proxy.py home.arpa 35353
 ```
 
-Then, delegate that domain to the machine the proxy is running on (_192.0.2.2_ in the example below) and advertise it by adding the necessary records to the domain you use for your network (_example.com_ in the example below). If you are using dnsmasq, this can be done using
+Then, delegate that domain to the machine the proxy is running on (_192.0.2.2_ in the example below) and advertise it by adding the necessary records to your network's DNS search domain (_example.com_ in the example below). If you are using dnsmasq, this can be done using
 
 ```
 server=/home.arpa/192.0.2.2#35353
 ptr-record=b._dns-sd._udp.example.com,home.arpa
 ptr-record=lb._dns-sd._udp.example.com,home.arpa
 ptr-record=db._dns-sd._udp.example.com,home.arpa
+```
+
+To check whether it is working, you can try some of the following queries (assuming your computer is named _yourcomputer_ and advertises an SSH service):
+```bash
+dig yourcomputer.home.arpa
+dig _ssh._tcp.home.arpa ptr
+dig yourcomputer._ssh._tcp.home.arpa srv
 ```
