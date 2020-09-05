@@ -48,6 +48,8 @@ class DynamicResolver(object):
         
         def txt(localname):
             info = self.zeroconf.get_service_info(localname, localname)
+            if info is None:
+                return [], [], []
             
             data = [b"%s=%s" % (p, info.properties[p]) for p in info.properties]
             answers = [dns.RRHeader(name=query.name.name, ttl=ttl, type=dns.TXT, payload=dns.Record_TXT(
@@ -57,6 +59,8 @@ class DynamicResolver(object):
         
         def srv(localname):
             info = self.zeroconf.get_service_info(localname, localname)
+            if info is None:
+                return [], [], []
             
             answers = [dns.RRHeader(name=query.name.name, ttl=ttl, type=dns.SRV, payload=dns.Record_SRV(
                     info.priority, info.weight, info.port, info.server[:-6] + domain
