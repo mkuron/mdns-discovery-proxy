@@ -1,0 +1,11 @@
+[Unit]
+Description=DNS-SD Proxy
+After=network.target network.service
+[Service]
+ExecStart=/usr/bin/python3 /home/sysadmin/dns-sd-proxy/proxy.py mdns.home.kuron-germany.de 35353
+Restart=always
+RestartSec=30
+Type=simple
+User=sysadmin
+[Install]
+WantedBy=multi-user.target
