@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from zeroconf import Zeroconf, ServiceBrowser, ServiceStateChange, DNSQuestion, DNSOutgoing, RecordUpdateListener, _TYPE_A, _CLASS_IN, _FLAGS_QR_QUERY
+from zeroconf import Zeroconf, ServiceBrowser, ServiceStateChange, ServiceInfo, DNSQuestion, DNSOutgoing, RecordUpdateListener, _TYPE_A, _CLASS_IN, _FLAGS_QR_QUERY
 import sys
 import time
 from twisted.internet import reactor, defer, threads
@@ -45,11 +45,17 @@ class DynamicResolver(object):
                     name=service[:-6] + domain
                 )))
             return answers, [], []
-        
+
         def txt(localname):
-            info = self.zeroconf.get_service_info(localname, localname)
-            if info is None:
-                return [], [], []
+            if localname.endswith('._device-info._tcp.local.'):
+                info = ServiceInfo(localname, localname)
+                info.request(self.zeroconf, timeout*1000)
+                if not info.text:
+                    return [], [], []
+            else:
+                info = self.zeroconf.get_service_info(localname, localname, timeout*1000)
+                if info is None:
+                    return [], [], []
             
             data = [b"%s=%s" % (p, info.properties[p]) for p in info.properties]
             answers = [dns.RRHeader(name=query.name.name, ttl=ttl, type=dns.TXT, payload=dns.Record_TXT(
@@ -58,7 +64,7 @@ class DynamicResolver(object):
             return answers, [], []
         
         def srv(localname):
-            info = self.zeroconf.get_service_info(localname, localname)
+            info = self.zeroconf.get_service_info(localname, localname, timeout*1000)
             if info is None:
                 return [], [], []
             
