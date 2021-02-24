@@ -39,12 +39,15 @@ class DynamicResolver(object):
             time.sleep(timeout)
             sb.cancel()
             
-            answers = []
+            answers, additional = [], []
             for service in services:
-                answers.append(dns.RRHeader(name=query.name.name, ttl=ttl, type=dns.PTR, payload=dns.Record_PTR(
+                answers.append(dns.RRHeader(name=localname[:-6] + domain, ttl=ttl, type=dns.PTR, payload=dns.Record_PTR(
                     name=service[:-6] + domain
                 )))
-            return answers, [], []
+                #txt_ans, _, _ = txt(service)
+                #srv_ans, _, a_ans = srv(service)
+                #additional += a_ans + txt_ans + srv_ans
+            return answers, [], additional
 
         def txt(localname):
             if localname.endswith('._device-info._tcp.local.'):
@@ -57,8 +60,17 @@ class DynamicResolver(object):
                 if info is None:
                     return [], [], []
             
-            data = [b"%s=%s" % (p, info.properties[p]) for p in info.properties]
-            answers = [dns.RRHeader(name=query.name.name, ttl=ttl, type=dns.TXT, payload=dns.Record_TXT(
+            order = []
+            i = 0
+            while i < len(info.text):
+                length = info.text[i]
+                i += 1
+                kv = info.text[i : i + length].split(b'=')
+                order.append(kv[0])
+                i += length
+            
+            data = [b"%s=%s" % (p, info.properties[p]) for p in sorted(info.properties, key=lambda k: order.index(k) if k in order else 1000)]
+            answers = [dns.RRHeader(name=localname[:-6] + domain, ttl=ttl, type=dns.TXT, payload=dns.Record_TXT(
                    *data
                 ))]
             return answers, [], []
@@ -68,13 +80,12 @@ class DynamicResolver(object):
             if info is None:
                 return [], [], []
             
-            answers = [dns.RRHeader(name=query.name.name, ttl=ttl, type=dns.SRV, payload=dns.Record_SRV(
+            answers = [dns.RRHeader(name=localname[:-6] + domain, ttl=ttl, type=dns.SRV, payload=dns.Record_SRV(
                     info.priority, info.weight, info.port, info.server[:-6] + domain
                 ))]
             additional = [dns.RRHeader(name=info.server[:-6] + domain, ttl=ttl, type=dns.A, payload=dns.Record_A(
                     socket.inet_ntop(socket.AF_INET, addr)
                 )) for addr in info.addresses]
-            
             return answers, [], additional
         
         def host(localname):
@@ -127,13 +138,20 @@ class DynamicResolver(object):
         else:
             return defer.fail(error.DomainError())
 
+class TruncatingDNSDatagramProtocol(dns.DNSDatagramProtocol):
+    def writeMessage(self, message, address):
+        if type(message) is dns.Message and len(message.toStr()) > 512:
+            message.trunc = 1
+            message.answers = message.additional = []
+        dns.DNSDatagramProtocol.writeMessage(self, message, address)
+
 def main():
     factory = server.DNSServerFactory(
         clients=[DynamicResolver()],
         verbose=0
     )
 
-    protocol = dns.DNSDatagramProtocol(controller=factory)
+    protocol = TruncatingDNSDatagramProtocol(controller=factory)
 
     reactor.listenUDP(port, protocol)
     reactor.listenTCP(port, factory)
