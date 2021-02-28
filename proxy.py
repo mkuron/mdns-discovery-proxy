@@ -141,8 +141,10 @@ class DynamicResolver(object):
 class TruncatingDNSDatagramProtocol(dns.DNSDatagramProtocol):
     def writeMessage(self, message, address):
         if type(message) is dns.Message and len(message.toStr()) > 512:
-            message.trunc = 1
-            message.answers = message.additional = []
+            message.additional = []
+            if len(message.toStr()) > 512:
+                message.trunc = 1
+                message.answers = []
         dns.DNSDatagramProtocol.writeMessage(self, message, address)
 
 def main():
