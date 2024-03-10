@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
-from zeroconf import Zeroconf, ServiceBrowser, ServiceStateChange, ServiceInfo, DNSQuestion, DNSOutgoing, RecordUpdateListener, _TYPE_A, _CLASS_IN, _FLAGS_QR_QUERY
+from zeroconf import Zeroconf, ServiceBrowser, ServiceStateChange, ServiceInfo, DNSQuestion, DNSOutgoing, RecordUpdateListener
+from zeroconf.const import _TYPE_A, _CLASS_IN, _FLAGS_QR_QUERY
 import sys
 import time
 from twisted.internet import reactor, defer, threads
