@@ -1,22 +1,38 @@
 #!/usr/bin/env python3
 
-from zeroconf import Zeroconf, ServiceBrowser, ServiceStateChange, ServiceInfo, DNSQuestion, DNSOutgoing, RecordUpdateListener
-from zeroconf.const import _TYPE_A, _CLASS_IN, _FLAGS_QR_QUERY
+from zeroconf import Zeroconf, ServiceBrowser, ServiceStateChange, ServiceInfo, DNSQuestion, DNSOutgoing, RecordUpdateListener, IPVersion
+from zeroconf.const import _TYPE_A, _TYPE_AAAA, _CLASS_IN, _FLAGS_QR_QUERY
 import sys
 import time
 from twisted.internet import reactor, defer, threads
 from twisted.names import client, dns, error, server
 from twisted.python import log
 import socket
+import ipaddress
+
+if len(sys.argv) < 3:
+    sys.exit("Usage: {} <domain> <port> [filter cidr...]".format(sys.argv[0]))
 
 domain = sys.argv[1]
 port = int(sys.argv[2])
-ttl = 120
+
+ip_range_filters = [ipaddress.ip_network(cidr) for cidr in sys.argv[3:]]
+filters_v4 = [ip for ip in ip_range_filters if ip.version == 4]
+filters_v6 = [ip for ip in ip_range_filters if ip.version == 6]
+
+# if some filters are provided, only IPs in those ranges will be returned
+
+if filters_v4:
+    print("IPv4 filter:", filters_v4)
+if filters_v6:
+    print("IPv6 filter:", filters_v6)
+
+ttl = 60
 timeout = 2
 
 class DynamicResolver(object):
     def __init__(self):
-        self.zeroconf = Zeroconf(ip_version=4)
+        self.zeroconf = Zeroconf(ip_version=IPVersion.All)
     
     def _dynamicResponseRequired(self, query):
         if str(query.name).endswith(domain):
@@ -70,7 +86,7 @@ class DynamicResolver(object):
                 order.append(kv[0])
                 i += length
             
-            data = [b"%s=%s" % (p, info.properties[p]) for p in sorted(info.properties, key=lambda k: order.index(k) if k in order else 1000)]
+            data = [b"%s=%s" % (p, info.properties[p] if info.properties[p] is not None else b"") for p in sorted(info.properties, key=lambda k: order.index(k) if k in order else 1000)]
             answers = [dns.RRHeader(name=localname[:-6] + domain, ttl=ttl, type=dns.TXT, payload=dns.Record_TXT(
                    *data
                 ))]
@@ -86,33 +102,76 @@ class DynamicResolver(object):
                 ))]
             additional = [dns.RRHeader(name=info.server[:-6] + domain, ttl=ttl, type=dns.A, payload=dns.Record_A(
                     socket.inet_ntop(socket.AF_INET, addr)
-                )) for addr in info.addresses]
+                )) for addr in info.addresses_by_version(IPVersion.V4Only)]
+            additional += [dns.RRHeader(name=info.server[:-6] + domain, ttl=ttl, type=dns.AAAA, payload=dns.Record_AAAA(
+                    socket.inet_ntop(socket.AF_INET6, addr)
+                )) for addr in info.addresses_by_version(IPVersion.V6Only)]
             return answers, [], additional
-        
+
+        class listener(RecordUpdateListener):
+            def __init__(self):
+                self.addr4s = set()
+                self.addr6s = set()
+                self.time = time.time()
+            def update_record(self, zc, now, record):
+                if record.type == _TYPE_A and len(record.address) == 4:
+                    self.addr4s.add(socket.inet_ntop(socket.AF_INET, record.address))
+                if record.type == _TYPE_AAAA and len(record.address) == 16:
+                    self.addr6s.add(socket.inet_ntop(socket.AF_INET6, record.address))
+            @property
+            def ipv4_addresses(self) -> list[str]:
+                ips = [ip for ip in map(ipaddress.ip_address, self.addr4s) if not ip.is_loopback]
+                if filters_v4:
+                    ips = [ip for ip in ips if any(ip in net for net in filters_v4)]
+                return [str(ip) for ip in ips]
+            @property
+            def ipv6_addresses(self) -> list[str]:
+                ips = [ip for ip in map(ipaddress.ip_address, self.addr6s) if not ip.is_loopback]
+                if filters_v6:
+                    ips = [ip for ip in ips if any(ip in net for net in filters_v6)]
+                return [str(ip) for ip in ips]
+
         def host(localname):
-            class listener(RecordUpdateListener):
-                def __init__(self):
-                    self.addrs = []
-                    self.time = time.time()
-                def update_record(self, zc, now, record):
-                    if record.type == _TYPE_A and len(record.address) == 4:
-                        self.addrs.append(socket.inet_ntop(socket.AF_INET, record.address))
-            
             l = listener()
             q = DNSQuestion(localname, _TYPE_A, _CLASS_IN)
             self.zeroconf.add_listener(l, q)
             out = DNSOutgoing(_FLAGS_QR_QUERY)
             out.add_question(q)
             self.zeroconf.send(out)
-            while len(l.addrs) == 0 and time.time() - l.time < timeout:
+            while len(l.addr4s) == 0 and time.time() - l.time < timeout:
                 time.sleep(0.1)
             self.zeroconf.remove_listener(l)
-            
+
             answers = [dns.RRHeader(name=query.name.name, ttl=ttl, type=dns.A, payload=dns.Record_A(
                     addr
-                )) for addr in l.addrs]
-            
-            return answers, [], []
+                )) for addr in l.ipv4_addresses]
+
+            extra = [dns.RRHeader(name=query.name.name, ttl=ttl, type=dns.AAAA, payload=dns.Record_AAAA(
+                    addr
+                )) for addr in l.ipv6_addresses]
+
+            return answers, [], extra
+
+        def host6(localname):
+            l = listener()
+            q = DNSQuestion(localname, _TYPE_AAAA, _CLASS_IN)
+            self.zeroconf.add_listener(l, q)
+            out = DNSOutgoing(_FLAGS_QR_QUERY)
+            out.add_question(q)
+            self.zeroconf.send(out)
+            while len(l.addr6s) == 0 and time.time() - l.time < timeout:
+                time.sleep(0.1)
+            self.zeroconf.remove_listener(l)
+
+            answers = [dns.RRHeader(name=query.name.name, ttl=ttl, type=dns.AAAA, payload=dns.Record_AAAA(
+                    addr
+                )) for addr in l.ipv6_addresses]
+
+            extra = [dns.RRHeader(name=query.name.name, ttl=ttl, type=dns.A, payload=dns.Record_A(
+                    addr
+                )) for addr in l.ipv4_addresses]
+
+            return answers, [], extra
         
         d = defer.Deferred()
         
@@ -128,7 +187,10 @@ class DynamicResolver(object):
         elif query.type == dns.A:
             d = threads.deferToThread(host, localname)
             return d
-        elif query.type != dns.AAAA:
+        elif query.type == dns.AAAA:
+            d = threads.deferToThread(host6, localname)
+            return d
+        else:
             print("Unsupported request", query)
         d.callback(([], [], []))
         return d
@@ -151,7 +213,7 @@ class TruncatingDNSDatagramProtocol(dns.DNSDatagramProtocol):
 def main():
     factory = server.DNSServerFactory(
         clients=[DynamicResolver()],
-        verbose=0
+        verbose=1
     )
 
     protocol = TruncatingDNSDatagramProtocol(controller=factory)
