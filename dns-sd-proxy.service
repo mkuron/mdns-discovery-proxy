@@ -7,5 +7,7 @@ Restart=always
 RestartSec=30
 Type=simple
 User=sysadmin
+MemoryAccounting=true
+MemoryMax=256M
 [Install]
 WantedBy=multi-user.target
